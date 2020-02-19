@@ -122,7 +122,20 @@ be added to the storage u2f_counter to get the real counter value.
  * storage.u2f_counter + config_u2f_offset.
  * This corresponds to the number of cleared bits in the U2FAREA.
  */
-static CONFIDENTIAL Session sessionsCache[10];
+
+// Session management
+typedef struct {
+  uint8_t id[32];
+  uint32_t usage;
+  uint8_t seed[64];
+  secbool seedCached;
+} Session;
+
+void session_clearCache(Session *session);
+uint8_t session_findLRU(void);
+uint8_t session_findSession(const uint8_t *sessionId);
+
+static CONFIDENTIAL Session sessionsCache[MAX_SESSIONS_COUNT];
 static Session *activeSessionCache;
 
 static uint32_t sessionLRUCounter = 0;
@@ -403,6 +416,8 @@ void config_init(void) {
   }
   data2hex(config_uuid, sizeof(config_uuid), config_uuid_str);
 
+  session_clear(false);
+
   usbTiny(oldTiny);
 }
 
@@ -563,7 +578,7 @@ static void get_root_node_callback(uint32_t iter, uint32_t total) {
 const uint8_t *config_getSeed(void) {
   // root node is properly cached
   if ((activeSessionCache != NULL) &&
-      (activeSessionCache->seedCached == true)) {
+      (activeSessionCache->seedCached == sectrue)) {
     return activeSessionCache->seed;
   }
 
@@ -587,12 +602,16 @@ const uint8_t *config_getSeed(void) {
       }
     }
     char oldTiny = usbTiny(1);
+    if (activeSessionCache == NULL) {
+      // this should not happen if the Host behaves and sends Initialize first
+      session_startSession(NULL);
+    }
     mnemonic_to_seed(mnemonic, passphrase, activeSessionCache->seed,
                      get_root_node_callback);  // BIP-0039
     memzero(mnemonic, sizeof(mnemonic));
     memzero(passphrase, sizeof(passphrase));
     usbTiny(oldTiny);
-    activeSessionCache->seedCached = true;
+    activeSessionCache->seedCached = sectrue;
     return activeSessionCache->seed;
   } else {
     fsm_sendFailure(FailureType_Failure_NotInitialized,
@@ -785,17 +804,20 @@ bool config_changeWipeCode(const char *pin, const char *wipe_code) {
 }
 
 uint8_t session_findLRU(void) {
-  uint8_t lowest_index = MAX_SESSIONS_COUNT;
-  uint32_t lowest = sessionLRUCounter;
+  uint8_t oldest_index = MAX_SESSIONS_COUNT;
+  uint32_t oldest_use = sessionLRUCounter;
   for (uint8_t i = 0; i < MAX_SESSIONS_COUNT; i++) {
-    if (sessionsCache[i].usage < lowest) {
-      lowest = sessionsCache[i].usage;
-      lowest_index = i;
+    if (sessionsCache[i].usage == 0) {
+      return i;
+    }
+    if (sessionsCache[i].usage <= oldest_use) {
+      oldest_use = sessionsCache[i].usage;
+      oldest_index = i;
     }
   }
-  // TODO: abort if lowest_index == MAX_SESSIONS_COUNT?
+  // TODO: abort if oldest_index == MAX_SESSIONS_COUNT?
   // TODO: it should never happen, so it is more of "internal" check
-  return lowest_index;
+  return oldest_index;
 }
 
 uint8_t session_findSession(const uint8_t *sessionId) {
@@ -809,42 +831,22 @@ uint8_t session_findSession(const uint8_t *sessionId) {
   return MAX_SESSIONS_COUNT;
 }
 
-uint8_t session_findEmpty(void) {
-  for (uint8_t i = 0; i < MAX_SESSIONS_COUNT; i++) {
-    if (sessionsCache[i].usage == 0) {
-      return i;
-    }
-  }
-  return MAX_SESSIONS_COUNT;
-}
-
 uint8_t *session_startSession(const uint8_t *received_session_id) {
   int session_index = MAX_SESSIONS_COUNT;
+
   if (received_session_id != NULL) {
     session_index = session_findSession(received_session_id);
   }
-  if (session_index != MAX_SESSIONS_COUNT) {
-    // session found in currently stored sessions
-    sessionLRUCounter++;
-    sessionsCache[session_index].usage = sessionLRUCounter;
-    activeSessionCache = sessionsCache + session_index;
-    return activeSessionCache->id;
-  } else {
-    // if not found or session_id not provided try to find an empty one
-    session_index = session_findEmpty();
-  }
+
   if (session_index == MAX_SESSIONS_COUNT) {
-    // if still no success, we need to clear the LRU item
+    // Session not found in cache. Use an empty one or the least recently used.
     session_index = session_findLRU();
+    session_clearCache(sessionsCache + session_index);
+    random_buffer(sessionsCache[session_index].id, 32);
   }
 
-  // now it is guaranteed `session_index` is the place to start a new session
   sessionLRUCounter++;
-  session_clearCache(sessionsCache + session_index);
-
   sessionsCache[session_index].usage = sessionLRUCounter;
-  random_buffer(sessionsCache[session_index].id, 32);
-
   activeSessionCache = sessionsCache + session_index;
   return activeSessionCache->id;
 }
