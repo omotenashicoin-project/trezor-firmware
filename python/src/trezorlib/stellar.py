@@ -254,9 +254,9 @@ def _parse_operation_bytes(unpacker):
         )
 
         if op.asset_type == ASSET_TYPE_ALPHA4:
-            op.asset_code = unpacker.unpack_fstring(4).decode("utf-8")
+            op.asset_code = unpacker.unpack_fstring(4).decode()
         if op.asset_type == ASSET_TYPE_ALPHA12:
-            op.asset_code = unpacker.unpack_fstring(12).decode("utf-8")
+            op.asset_code = unpacker.unpack_fstring(12).decode()
 
         op.is_authorized = unpacker.unpack_bool()
 
@@ -296,11 +296,11 @@ def _xdr_read_asset(unpacker):
     asset = messages.StellarAssetType(type=unpacker.unpack_uint())
 
     if asset.type == ASSET_TYPE_ALPHA4:
-        asset.code = unpacker.unpack_fstring(4).decode("utf-8")
+        asset.code = unpacker.unpack_fstring(4).decode()
         asset.issuer = _xdr_read_address(unpacker)
 
     if asset.type == ASSET_TYPE_ALPHA12:
-        asset.code = unpacker.unpack_fstring(12).decode("utf-8")
+        asset.code = unpacker.unpack_fstring(12).decode()
         asset.issuer = _xdr_read_address(unpacker)
 
     return asset
