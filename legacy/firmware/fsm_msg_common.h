@@ -349,7 +349,7 @@ void fsm_msgClearSession(const ClearSession *msg) {
   (void)msg;
   // we do not actually clear the session, we just lock it
   // TODO: the message should be called LockSession see #819
-  session_lock();
+  config_lockDevice();
   layoutScreensaver();
   fsm_sendSuccess(_("Session cleared"));
 }

@@ -88,7 +88,7 @@ extern Storage configUpdate;
 
 void config_init(void);
 void session_clear(bool lock);
-void session_lock(void);
+void config_lockDevice(void);
 
 void config_loadDevice(const LoadDevice *msg);
 

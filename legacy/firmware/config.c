@@ -126,19 +126,19 @@ be added to the storage u2f_counter to get the real counter value.
 // Session management
 typedef struct {
   uint8_t id[32];
-  uint32_t usage;
+  uint32_t last_use;
   uint8_t seed[64];
   secbool seedCached;
 } Session;
 
-void session_clearCache(Session *session);
-uint8_t session_findLRU(void);
-uint8_t session_findSession(const uint8_t *sessionId);
+static void session_clearCache(Session *session);
+static uint8_t session_findLeastRecent(void);
+static uint8_t session_findSession(const uint8_t *sessionId);
 
 static CONFIDENTIAL Session sessionsCache[MAX_SESSIONS_COUNT];
 static Session *activeSessionCache;
 
-static uint32_t sessionLRUCounter = 0;
+static uint32_t sessionUseCounter = 0;
 
 #define autoLockDelayMsDefault (10 * 60 * 1000U)  // 10 minutes
 static secbool autoLockDelayMsCached = secfalse;
@@ -427,18 +427,18 @@ void session_clear(bool lock) {
   }
   activeSessionCache = NULL;
   if (lock) {
-    session_lock();
+    config_lockDevice();
   }
 }
 
 void session_clearCache(Session *session) {
-  session->usage = 0;
+  session->last_use = 0;
   memzero(session->id, sizeof(session->id));
   memzero(session->seed, sizeof(session->seed));
   session->seedCached = false;
 }
 
-void session_lock(void) { storage_lock(); }
+void config_lockDevice(void) { storage_lock(); }
 
 static void get_u2froot_callback(uint32_t iter, uint32_t total) {
   layoutProgress(_("Updating"), 1000 * iter / total);
@@ -803,26 +803,25 @@ bool config_changeWipeCode(const char *pin, const char *wipe_code) {
   return sectrue == ret;
 }
 
-uint8_t session_findLRU(void) {
-  uint8_t oldest_index = MAX_SESSIONS_COUNT;
-  uint32_t oldest_use = sessionLRUCounter;
+uint8_t session_findLeastRecent(void) {
+  uint8_t least_recent_index = MAX_SESSIONS_COUNT;
+  uint32_t least_recent_use = sessionUseCounter;
   for (uint8_t i = 0; i < MAX_SESSIONS_COUNT; i++) {
-    if (sessionsCache[i].usage == 0) {
+    if (sessionsCache[i].last_use == 0) {
       return i;
     }
-    if (sessionsCache[i].usage <= oldest_use) {
-      oldest_use = sessionsCache[i].usage;
-      oldest_index = i;
+    if (sessionsCache[i].last_use <= least_recent_use) {
+      least_recent_use = sessionsCache[i].last_use;
+      least_recent_index = i;
     }
   }
-  // TODO: abort if oldest_index == MAX_SESSIONS_COUNT?
-  // TODO: it should never happen, so it is more of "internal" check
-  return oldest_index;
+  ensure(sectrue * (least_recent_index < MAX_SESSIONS_COUNT), NULL);
+  return least_recent_index;
 }
 
 uint8_t session_findSession(const uint8_t *sessionId) {
   for (uint8_t i = 0; i < MAX_SESSIONS_COUNT; i++) {
-    if (sessionsCache[i].usage != 0) {
+    if (sessionsCache[i].last_use != 0) {
       if (memcmp(sessionsCache[i].id, sessionId, 32) == 0) {  // session found
         return i;
       }
@@ -840,13 +839,13 @@ uint8_t *session_startSession(const uint8_t *received_session_id) {
 
   if (session_index == MAX_SESSIONS_COUNT) {
     // Session not found in cache. Use an empty one or the least recently used.
-    session_index = session_findLRU();
+    session_index = session_findLeastRecent();
     session_clearCache(sessionsCache + session_index);
     random_buffer(sessionsCache[session_index].id, 32);
   }
 
-  sessionLRUCounter++;
-  sessionsCache[session_index].usage = sessionLRUCounter;
+  sessionUseCounter++;
+  sessionsCache[session_index].last_use = sessionUseCounter;
   activeSessionCache = sessionsCache + session_index;
   return activeSessionCache->id;
 }
